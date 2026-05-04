@@ -110,9 +110,10 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(types, ["narrow", "root"])
 
     def test_post_commit_hook_publishes_automatically(self):
-        # init with hook enabled (SUPABASE_URL is set)
-        out = self._cli("init", "--slug", self.slug)
+        # explicitly target supabase even if VERCEL_TOKEN is also set
+        out = self._cli("init", "--slug", self.slug, "--hook-target", "supabase")
         self.assertTrue(out["post_commit_hook"])
+        self.assertEqual(out["hook_target"], "supabase")
 
         # commit — hook fires automatically
         self._cli(

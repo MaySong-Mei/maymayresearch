@@ -92,18 +92,20 @@ def cmd_init(args) -> int:
     if (repo.path / ".git").exists():
         return _err(f"repo already initialized at {repo.path}")
     repo.init()
+    target = _resolve_hook_target(args)
     hook_installed = False
-    if not args.no_hook and env_lookup("SUPABASE_URL"):
-        hook_installed = _install_hook(repo, slug=args.slug or repo.path.name)
+    if target:
+        hook_installed = _install_hook(repo, slug=args.slug or repo.path.name, target=target)
     _emit(
         {
             "ok": True,
             "repo": str(repo.path),
             "branch": repo.current_branch(),
             "post_commit_hook": hook_installed,
+            "hook_target": target,
         },
         f"initialized {repo.path} on branch {repo.current_branch()}"
-        + (" (post-commit hook → Supabase enabled)" if hook_installed else ""),
+        + (f" (post-commit hook → {target})" if hook_installed else ""),
     )
     return 0
 
@@ -112,19 +114,36 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def _install_hook(repo: ResearchRepo, slug: str) -> bool:
+def _resolve_hook_target(args):
+    """Pick a hook target: explicit flag wins, else env-driven, else None."""
+    if getattr(args, "no_hook", False):
+        return None
+    target = getattr(args, "hook_target", None)
+    if target == "auto" or target is None:
+        if env_lookup("VERCEL_TOKEN"):
+            return "vercel"
+        if env_lookup("SUPABASE_URL"):
+            return "supabase"
+        return None
+    return target
+
+
+def _install_hook(repo: ResearchRepo, slug: str, target: str = "vercel") -> bool:
+    if target not in {"vercel", "supabase"}:
+        raise ValueError(f"unknown hook target {target!r}")
     hook_path = repo.path / ".git" / "hooks" / "post-commit"
     project_root = _project_root()
+    sub = "deploy" if target == "vercel" else "publish"
     script = (
         "#!/bin/sh\n"
-        "# auto-installed by harness — publishes thesis state to Supabase\n"
+        f"# auto-installed by harness — runs `harness {sub}` after every commit.\n"
         "# failures are non-fatal: commits succeed regardless of network.\n"
         f'PROJECT_ROOT="{project_root}"\n'
         f'REPO="{repo.path}"\n'
         f'SLUG="{slug}"\n'
         'cd "$PROJECT_ROOT" || exit 0\n'
-        '{ python3 -m harness.cli --repo "$REPO" publish --slug "$SLUG" --quiet; } '
-        '>"$REPO/.git/last-publish.log" 2>&1 || true\n'
+        f'{{ python3 -m harness.cli --repo "$REPO" {sub} --slug "$SLUG" --quiet; }} '
+        f'>"$REPO/.git/last-{sub}.log" 2>&1 || true\n'
     )
     hook_path.write_text(script)
     hook_path.chmod(0o755)
@@ -136,10 +155,18 @@ def cmd_install_hook(args) -> int:
     if not (repo.path / ".git").exists():
         return _err(f"not a git repo: {repo.path}")
     slug = args.slug or repo.path.name
-    _install_hook(repo, slug)
+    target = args.hook_target
+    if target == "auto":
+        target = _resolve_hook_target(args) or "vercel"
+    _install_hook(repo, slug, target=target)
     _emit(
-        {"ok": True, "hook": str(repo.path / ".git" / "hooks" / "post-commit"), "slug": slug},
-        f"installed post-commit hook (slug={slug})",
+        {
+            "ok": True,
+            "hook": str(repo.path / ".git" / "hooks" / "post-commit"),
+            "slug": slug,
+            "target": target,
+        },
+        f"installed post-commit hook (slug={slug}, target={target})",
     )
     return 0
 
@@ -373,6 +400,74 @@ def cmd_render(args) -> int:
     return 0
 
 
+def cmd_deploy(args) -> int:
+    """Render the repo to a static HTML snapshot and deploy it to Vercel."""
+    import re
+    import shutil as _shutil
+    import subprocess as _sp
+    import tempfile
+
+    repo = ResearchRepo(Path(args.repo))
+    token = args.token or env_lookup("VERCEL_TOKEN")
+    if not token:
+        return _err("missing VERCEL_TOKEN (env or --token)")
+    project = args.project or env_lookup("VERCEL_PROJECT") or repo.path.name
+    scope = args.scope or env_lookup("VERCEL_SCOPE")
+    refresh = args.refresh
+
+    dist = Path(tempfile.mkdtemp(prefix="harness_deploy_"))
+    try:
+        out_html = dist / "index.html"
+        render_html(
+            repo,
+            out_html,
+            title=args.title or f"Research Thesis Tree — {project}",
+            subtitle=args.subtitle or "static snapshot from local git",
+        )
+        if refresh > 0:
+            html = out_html.read_text()
+            html = html.replace(
+                "</head>",
+                f'<meta http-equiv="refresh" content="{refresh}"></head>',
+                1,
+            )
+            out_html.write_text(html)
+
+        cmd = [
+            args.npx or "npx", "vercel@latest", "deploy",
+            "--token", token, "--prod", "--yes", "--name", project,
+        ]
+        if scope:
+            cmd.extend(["--scope", scope])
+
+        runner = getattr(args, "_runner", None) or _sp.run
+        result = runner(cmd, cwd=dist, capture_output=True, text=True, check=False)
+    finally:
+        _shutil.rmtree(dist, ignore_errors=True)
+
+    if result.returncode != 0:
+        return _err(f"vercel deploy failed: {(result.stderr or result.stdout)[-500:]}")
+
+    combined = (result.stdout or "") + "\n" + (result.stderr or "")
+    url = None
+    alias_pat = re.compile(r"https://" + re.escape(project) + r"\.vercel\.app\b")
+    m = alias_pat.search(combined)
+    if m:
+        url = m.group(0)
+    else:
+        m = re.search(r"https://[a-zA-Z0-9-]+\.vercel\.app\b", combined)
+        if m:
+            url = m.group(0)
+
+    payload = {"ok": True, "project": project, "url": url}
+    if args.quiet:
+        json.dump(payload, sys.stdout, indent=2, ensure_ascii=False)
+        sys.stdout.write("\n")
+    else:
+        _emit(payload, f"deployed {project} → {url}")
+    return 0
+
+
 def cmd_build_dashboard(args) -> int:
     """Bake SUPABASE_URL/ANON_KEY into the static dashboard.html for the repo slug."""
     src = Path(__file__).resolve().parent / "dashboard.html"
@@ -448,13 +543,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("init", help="initialize a fresh research repo")
     p.add_argument("--no-hook", action="store_true",
-                   help="skip post-commit hook even if SUPABASE_URL is set")
+                   help="skip post-commit hook entirely")
     p.add_argument("--slug", default=None,
-                   help="repo slug for Supabase rows (default: dir basename)")
+                   help="repo slug (default: dir basename)")
+    p.add_argument("--hook-target", choices=["auto", "vercel", "supabase"],
+                   default="auto",
+                   help="which target the post-commit hook calls (default: auto)")
     p.set_defaults(func=cmd_init)
 
-    p = sub.add_parser("install-hook", help="install post-commit publish hook")
+    p = sub.add_parser("install-hook", help="install post-commit hook")
     p.add_argument("--slug", default=None)
+    p.add_argument("--hook-target", choices=["auto", "vercel", "supabase"],
+                   default="auto")
     p.set_defaults(func=cmd_install_hook)
 
     p = sub.add_parser("publish", help="sync git state to Supabase")
@@ -462,6 +562,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--quiet", action="store_true",
                    help="suppress stderr summary (used by post-commit hook)")
     p.set_defaults(func=cmd_publish)
+
+    p = sub.add_parser("deploy", help="render snapshot and deploy to Vercel")
+    p.add_argument("--slug", default=None,
+                   help="(unused; accepted for hook-script compatibility)")
+    p.add_argument("--project", default=None,
+                   help="vercel project name (default: repo basename or VERCEL_PROJECT)")
+    p.add_argument("--scope", default=None,
+                   help="vercel team scope (default: VERCEL_SCOPE)")
+    p.add_argument("--token", default=None,
+                   help="vercel token (default: VERCEL_TOKEN env)")
+    p.add_argument("--title", default=None)
+    p.add_argument("--subtitle", default=None)
+    p.add_argument("--refresh", type=int, default=30,
+                   help="auto-refresh interval in seconds (0 = disabled)")
+    p.add_argument("--npx", default=None,
+                   help="path to npx executable (default: 'npx')")
+    p.add_argument("--quiet", action="store_true")
+    p.set_defaults(func=cmd_deploy)
 
     p = sub.add_parser("commit", help="commit a thesis node on the current branch")
     _add_node_args(p)
