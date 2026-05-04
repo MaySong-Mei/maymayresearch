@@ -29,9 +29,11 @@ VALID_STATUSES = {
 
 @dataclass
 class ThesisNode:
-    claim: str
-    prediction: str = ""
-    evidence: str = ""
+    claim: str                 # the hypothesis statement
+    prediction: str = ""       # falsifiable prediction
+    design: str = ""           # experimental design / methodology
+    evidence: str = ""         # results: what was actually observed
+    decision: str = ""         # next-step decision based on results
     status: str = "pending"
     type: str = "narrow"
     review_comments: List[str] = field(default_factory=list)
@@ -70,6 +72,11 @@ class ResearchRepo:
         self._git("config", "user.email", "harness@local")
         self._git("config", "user.name", "Research Harness")
         self._git("config", "commit.gpgsign", "false")
+        # Use git's union merge driver on the diary so synthesis merges
+        # concatenate both sides' lines instead of leaving conflict markers.
+        (self.path / ".gitattributes").write_text(
+            "FINDINGS.md merge=union\n"
+        )
 
     def commit_node(self, node: ThesisNode, diary_append: str = "") -> str:
         (self.path / "thesis.json").write_text(node.to_json())
@@ -119,6 +126,14 @@ class ResearchRepo:
         if node.type != "synthesis":
             raise ValueError("synthesize requires node.type == 'synthesis'")
         self._git("checkout", base_branch)
+        # Ensure union merge driver is set for repos created before this rule existed.
+        attr = self.path / ".gitattributes"
+        attr_line = "FINDINGS.md merge=union\n"
+        if not attr.exists() or attr_line not in attr.read_text():
+            existing = attr.read_text() if attr.exists() else ""
+            attr.write_text(existing + attr_line)
+            self._git("add", ".gitattributes")
+            self._git("commit", "-m", "harness: enable union merge for FINDINGS.md")
         self._git("checkout", "-b", new_branch_name)
         # --no-ff to force a merge commit, --no-commit so we can write resolution
         self._git("merge", "--no-ff", "--no-commit", other_branch, check=False)

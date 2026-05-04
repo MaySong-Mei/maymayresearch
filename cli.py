@@ -69,7 +69,9 @@ def _read_node_from_args(args) -> ThesisNode:
     return ThesisNode(
         claim=args.claim or "",
         prediction=args.prediction or "",
+        design=args.design or "",
         evidence=args.evidence or "",
+        decision=args.decision or "",
         status=args.status,
         type=args.type,
         notes=args.notes or "",
@@ -524,9 +526,11 @@ def cmd_serve(args) -> int:
 def _add_node_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--type", choices=sorted(VALID_TYPES), default="narrow")
     p.add_argument("--status", choices=sorted(VALID_STATUSES), default="pending")
-    p.add_argument("--claim", default=None)
-    p.add_argument("--prediction", default=None)
-    p.add_argument("--evidence", default=None)
+    p.add_argument("--claim", default=None, help="hypothesis statement")
+    p.add_argument("--prediction", default=None, help="falsifiable prediction")
+    p.add_argument("--design", default=None, help="experimental design / methodology")
+    p.add_argument("--evidence", default=None, help="results / what was observed")
+    p.add_argument("--decision", default=None, help="next-step decision")
     p.add_argument("--notes", default=None)
     p.add_argument("--diary", default=None, help="appended to FINDINGS.md")
     p.add_argument(

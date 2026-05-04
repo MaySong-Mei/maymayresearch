@@ -190,7 +190,9 @@ def _node_payload(n: dict, branches: Dict[str, str]) -> dict:
         "status": n.get("status", "pending"),
         "claim": n.get("claim") or "",
         "prediction": n.get("prediction") or "",
+        "design": n.get("design") or "",
         "evidence": n.get("evidence") or "",
+        "decision": n.get("decision") or "",
         "notes": n.get("notes") or "",
         "review_comments": n.get("review_comments") or [],
         "parents": n.get("parents") or [],
@@ -395,10 +397,12 @@ function renderNodeModal(n) {{
       <span><b>状态</b>: ${{escapeHtml(STATUS_ZH[n.status] || n.status)}}</span>
       ${{branchPills}}
     </div>
+    ${{sec("实验设计", n.design)}}
     ${{sec("预测", n.prediction)}}
-    ${{sec("证据", n.evidence)}}
-    ${{sec("备注", n.notes)}}
+    ${{sec("实验结果", n.evidence)}}
+    ${{sec("下一步决策", n.decision)}}
     ${{reviews}}
+    ${{sec("备注", n.notes)}}
   `;
 }}
 
@@ -430,6 +434,19 @@ window.closeModalIfBackdrop = function(event) {{
 document.addEventListener("keydown", (e) => {{
   if (e.key === "Escape") window.closeModal();
 }});
+
+// auto-open via URL params: ?focus=<short>  or  ?diary=1
+(function() {{
+  const params = new URLSearchParams(location.search);
+  const focus = params.get("focus");
+  if (focus) {{
+    setTimeout(() => window.openNode(focus), 50);
+    return;
+  }}
+  if (params.get("diary") === "1") {{
+    setTimeout(() => window.openDiary(), 50);
+  }}
+}})();
 </script>
 </body>
 </html>
