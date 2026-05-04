@@ -57,14 +57,18 @@ class IntegrationTests(unittest.TestCase):
         self.slug = f"itest_{os.getpid()}_{int(time.time() * 1000)}"
 
     def tearDown(self):
-        # Clean up rows for our slug
+        # Clean up rows for our slug — tolerate transient network errors so a
+        # flake doesn't fail an otherwise-passing test.
         if self.url and self.service:
             for table in ("nodes", "branches", "reviews"):
-                _request(
-                    f"{self.url}/rest/v1/{table}?repo=eq.{self.slug}",
-                    method="DELETE",
-                    key=self.service,
-                )
+                try:
+                    _request(
+                        f"{self.url}/rest/v1/{table}?repo=eq.{self.slug}",
+                        method="DELETE",
+                        key=self.service,
+                    )
+                except (urllib.error.URLError, ConnectionError, TimeoutError):
+                    pass
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _cli(self, *args: str, stdin: str = "") -> dict:

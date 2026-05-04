@@ -421,8 +421,8 @@ def cmd_deploy(args) -> int:
         render_html(
             repo,
             out_html,
-            title=args.title or f"Research Thesis Tree — {project}",
-            subtitle=args.subtitle or "static snapshot from local git",
+            title=args.title or f"研究 thesis 树 — {project}",
+            subtitle=args.subtitle or "本地 git 快照",
         )
         if refresh > 0:
             html = out_html.read_text()

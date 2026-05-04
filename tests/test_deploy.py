@@ -45,8 +45,12 @@ class DeployTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="deploy_test_"))
         self.repo = _seed_repo(self.tmp / "repo")
+        # Isolate from any harness/.env present on the dev machine.
+        self._real_env_lookup = cli.env_lookup
+        cli.env_lookup = lambda key, default=None: default
 
     def tearDown(self):
+        cli.env_lookup = self._real_env_lookup
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _ns(self, **overrides):
@@ -136,17 +140,12 @@ class DeployTests(unittest.TestCase):
         self.assertIn("bad scope", payload["error"])
 
     def test_missing_token(self):
-        # Stub env_lookup so VERCEL_TOKEN appears unset
-        original = cli.env_lookup
-        cli.env_lookup = lambda key, default=None: None
-        try:
-            ns = self._ns(token=None)
-            rc, stdout, _ = self._run(ns, MagicMock())
-            self.assertNotEqual(rc, 0)
-            payload = json.loads(stdout)
-            self.assertIn("VERCEL_TOKEN", payload["error"])
-        finally:
-            cli.env_lookup = original
+        # env_lookup already stubbed in setUp to return None
+        ns = self._ns(token=None)
+        rc, stdout, _ = self._run(ns, MagicMock())
+        self.assertNotEqual(rc, 0)
+        payload = json.loads(stdout)
+        self.assertIn("VERCEL_TOKEN", payload["error"])
 
 
 class HookInstallTests(unittest.TestCase):
